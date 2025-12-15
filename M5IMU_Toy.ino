@@ -1,5 +1,8 @@
 #include <M5Unified.h>
+#include <WiFi.h>
+#include <WiFiUdp.h>
 #include <math.h>
+#include "config.h"
 
 static auto &dsp = (M5.Display);
 static LGFX_Sprite sprite(&M5.Display);
@@ -15,8 +18,15 @@ const float smoothFactor = 0.3f;
 // gyro bar colors (X, Y, Z)
 static constexpr uint32_t gyro_colors[3] = {0xFF0000u, 0x00FF00u, 0x0000FFu};
 
+// WiFi & UDP
+WiFiUDP udp;
+bool wifiConnected = false;
+unsigned long lastSendTime = 0;
+const unsigned long sendCooldown = 100; // ms between sends
+
 void setup()
 {
+  Serial.begin(115200);
   auto cfg = M5.config();
   M5.begin(cfg);
   dsp.setRotation(3);
@@ -25,6 +35,43 @@ void setup()
   sprite.createSprite(dsp.width(), dsp.height());
   sprite.setTextSize(2);
   sprite.setTextColor(TFT_WHITE, TFT_BLACK);
+
+  // WiFi connection using M5Unified style
+  Serial.println("\n=== WiFi Connection ===");
+  Serial.printf("SSID: %s\n", WIFI_SSID);
+  
+  dsp.setCursor(0, 0);
+  dsp.setTextSize(1);
+  dsp.print("WiFi:");
+  
+  WiFi.disconnect();
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  
+  for (int i = 0; i < 50 && WiFi.status() != WL_CONNECTED; ++i) {
+    dsp.print(".");
+    Serial.print(".");
+    M5.delay(200);
+  }
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    wifiConnected = true;
+    String ip = WiFi.localIP().toString();
+    dsp.println(" OK");
+    dsp.printf("IP:%s", ip.c_str());
+    Serial.println(" Connected!");
+    Serial.printf("IP Address: %s\n", ip.c_str());
+    Serial.printf("UDP Server: %s:%d\n", UDP_SERVER_IP, UDP_SERVER_PORT);
+    Serial.printf("Threshold: %.1f deg/s\n", GYRO_MAGNITUDE_THRESHOLD);
+  } else {
+    dsp.println(" FAIL");
+    Serial.println(" Failed!");
+  }
+  Serial.println("======================\n");
+  
+  M5.delay(2000);
+  dsp.fillScreen(TFT_BLACK);
+  sprite.setTextSize(2);
 }
 
 // draw a horizontal bar from center (ox). positive -> right, negative -> left
@@ -54,6 +101,25 @@ void loop()
     float gz = data.gyro.z;
     if (!isfinite(ax) || !isfinite(ay) || !isfinite(az))
       return;
+
+    // calculate gyro magnitude
+    float gyroMagnitude = sqrtf(gx * gx + gy * gy + gz * gz);
+
+    // send UDP packet
+    if (wifiConnected && gyroMagnitude >= GYRO_MAGNITUDE_THRESHOLD) {
+      unsigned long now = millis();
+      if (now - lastSendTime >= sendCooldown) {
+        lastSendTime = now;
+        String json = String("{\"magnitude\":") + String(gyroMagnitude, 2) + "}";
+        udp.beginPacket(UDP_SERVER_IP, UDP_SERVER_PORT);
+        udp.print(json);
+        udp.endPacket();
+        
+        // [debug] Serial output
+        Serial.printf("[UDP] Sent: %s (gx:%.1f gy:%.1f gz:%.1f)\n", 
+                      json.c_str(), gx, gy, gz);
+      }
+    }
 
     float targetPx = X0 - ay * R3;
     float targetPy = Y0 - ax * R3;
@@ -102,5 +168,5 @@ void loop()
     // calibration placeholder
   }
 
-  delay(10);
+  M5.delay(20);
 }

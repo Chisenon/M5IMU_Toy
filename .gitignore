@@ -1,0 +1,11 @@
+# Configuration with credentials
+config.h
+
+# Build artifacts
+*.hex
+*.bin
+*.elf
+
+# IDE
+.vscode/
+.DS_Store
